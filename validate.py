@@ -98,7 +98,7 @@ parser.add_argument('--no-prefetcher', action='store_true', default=False,
                     help='disable fast prefetcher')
 parser.add_argument('--pin-mem', action='store_true', default=False,
                     help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
-parser.add_argument('--channels-last', action='store_true', default=False,
+parser.add_argument('--channels_last', default=1, type=int,
                     help='Use channels_last memory layout')
 parser.add_argument('--device', default='cuda', type=str,
                     help="Device (accelerator) to use.")
@@ -129,6 +129,14 @@ parser.add_argument('--valid-labels', default='', type=str, metavar='FILENAME',
                     help='Valid label indices txt file for validation of partial label space')
 parser.add_argument('--retry', default=False, action='store_true',
                     help='Enable batch size decay & retry for single model validation')
+
+# for oob launch
+parser.add_argument('--precision', default="float32", type=str, help='precision')
+parser.add_argument('--ipex', action='store_true', default=False, help='enable ipex')
+parser.add_argument('--jit', action='store_true', default=False, help='enable JIT')
+parser.add_argument('--profile', action='store_true', default=False, help='collect timeline')
+parser.add_argument('--num_iter', default=-1, type=int, help='test iterations')
+parser.add_argument('--num_warmup', default=-1, type=int, help='test warmup')
 
 
 def validate(args):
@@ -210,6 +218,7 @@ def validate(args):
 
     if args.channels_last:
         model = model.to(memory_format=torch.channels_last)
+        print("---- Use CL model")
 
     if args.num_gpu > 1:
         model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu)))
@@ -259,6 +268,16 @@ def validate(args):
     top5 = AverageMeter()
 
     model.eval()
+    if args.ipex:
+        import intel_extension_for_pytorch as ipex
+        if args.precision == "bfloat16":
+            model = ipex.optimize(model, dtype=torch.bfloat16, inplace=True)
+        else:
+            model = ipex.optimize(model, dtype=torch.float32, inplace=True)
+        print("---- Use ipex model")
+
+    total_time = 0.0
+    total_sample = 0
     with torch.no_grad():
         # warmup, reduce variability of first batch time, especially for comparing torchscript vs non
         input = torch.randn((args.batch_size,) + tuple(data_config['input_size'])).to(device)
@@ -268,50 +287,117 @@ def validate(args):
             model(input)
 
         end = time.time()
-        for batch_idx, (input, target) in enumerate(loader):
-            if args.no_prefetcher:
-                target = target.to(device)
-                input = input.to(device)
-            if args.channels_last:
-                input = input.contiguous(memory_format=torch.channels_last)
+        if args.profile:
+            profile_iter = args.num_iter/2 if args.num_iter > 0 else len(loader)/2
+            def trace_handler(p):
+                output = p.key_averages().table(sort_by="self_cpu_time_total")
+                print(output)
+                import pathlib
+                timeline_dir = str(pathlib.Path.cwd()) + '/timeline/'
+                if not os.path.exists(timeline_dir):
+                    try:
+                        os.makedirs(timeline_dir)
+                    except:
+                        pass
+                timeline_file = timeline_dir + 'timeline-' + str(torch.backends.quantized.engine) + '-' + \
+                            args.model + '-' + str(p.step_num) + '-' + str(os.getpid()) + '.json'
+                p.export_chrome_trace(timeline_file)
+            with torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU],
+                record_shapes=True,
+                schedule=torch.profiler.schedule(
+                    wait=int(profile_iter),
+                    warmup=2,
+                    active=1,
+                ),
+                on_trace_ready=trace_handler,
+            ) as p:
+                for batch_idx, (input, target) in enumerate(loader):
+                    if args.num_iter > 0 and batch_idx >= args.num_iter:
+                        break
+                    if args.no_prefetcher:
+                        target = target.to(device)
+                        input = input.to(device)
+                    if args.channels_last:
+                        input = input.contiguous(memory_format=torch.channels_last)
+                    if args.jit and batch_idx == 0:
+                        model = torch.jit.trace(model, input, check_trace=False)
+                        model = torch.jit.freeze(model)
+                        print("---- Use trace model")
 
-            # compute output
-            with amp_autocast():
-                output = model(input)
+                    # compute output
+                    elapsed = time.time()
+                    with amp_autocast():
+                        output = model(input)
+                    elapsed = time.time() - elapsed
+                    p.step()
+                    print("Iteration: {}, inference time: {} sec.".format(batch_idx, elapsed), flush=True)
+                    if batch_idx >= args.num_warmup:
+                        total_sample += args.batch_size
+                        total_time += elapsed
+                    
+                    if valid_labels is not None:
+                        output = output[:, valid_labels]
+                    loss = criterion(output, target)
 
-            if valid_labels is not None:
-                output = output[:, valid_labels]
-            loss = criterion(output, target)
+                    if real_labels is not None:
+                        real_labels.add_result(output)
 
-            if real_labels is not None:
-                real_labels.add_result(output)
+                    # measure accuracy and record loss
+                    acc1, acc5 = accuracy(output.detach(), target, topk=(1, 5))
+                    losses.update(loss.item(), input.size(0))
+                    top1.update(acc1.item(), input.size(0))
+                    top5.update(acc5.item(), input.size(0))
 
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output.detach(), target, topk=(1, 5))
-            losses.update(loss.item(), input.size(0))
-            top1.update(acc1.item(), input.size(0))
-            top5.update(acc5.item(), input.size(0))
+                    # measure elapsed time
+                    batch_time.update(time.time() - end)
+                    end = time.time()
+        else:
+            for batch_idx, (input, target) in enumerate(loader):
+                if args.num_iter > 0 and batch_idx >= args.num_iter:
+                    break
+                if args.no_prefetcher:
+                    target = target.to(device)
+                    input = input.to(device)
+                if args.channels_last:
+                    input = input.contiguous(memory_format=torch.channels_last)
+                if args.jit and batch_idx == 0:
+                    model = torch.jit.trace(model, input, check_trace=False)
+                    model = torch.jit.freeze(model)
+                    print("---- Use trace model")
 
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
+                # compute output
+                elapsed = time.time()
+                with amp_autocast():
+                    output = model(input)
+                elapsed = time.time() - elapsed
+                print("Iteration: {}, inference time: {} sec.".format(batch_idx, elapsed), flush=True)
+                if batch_idx >= args.num_warmup:
+                    total_sample += args.batch_size
+                    total_time += elapsed
+                
+                if valid_labels is not None:
+                    output = output[:, valid_labels]
+                loss = criterion(output, target)
 
-            if batch_idx % args.log_freq == 0:
-                _logger.info(
-                    'Test: [{0:>4d}/{1}]  '
-                    'Time: {batch_time.val:.3f}s ({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
-                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-                    'Acc@1: {top1.val:>7.3f} ({top1.avg:>7.3f})  '
-                    'Acc@5: {top5.val:>7.3f} ({top5.avg:>7.3f})'.format(
-                        batch_idx,
-                        len(loader),
-                        batch_time=batch_time,
-                        rate_avg=input.size(0) / batch_time.avg,
-                        loss=losses,
-                        top1=top1,
-                        top5=top5
-                    )
-                )
+                if real_labels is not None:
+                    real_labels.add_result(output)
+
+                # measure accuracy and record loss
+                acc1, acc5 = accuracy(output.detach(), target, topk=(1, 5))
+                losses.update(loss.item(), input.size(0))
+                top1.update(acc1.item(), input.size(0))
+                top5.update(acc5.item(), input.size(0))
+
+                # measure elapsed time
+                batch_time.update(time.time() - end)
+                end = time.time()
+
+    print("\n", "-"*20, "Summary", "-"*20)
+    latency = total_time / total_sample * 1000
+    throughput = total_sample / total_time
+    print("inference Latency:\t {:.3f} ms".format(latency))
+    print("inference Throughput:\t {:.2f} images/s".format(throughput))
 
     if real_labels is not None:
         # real labels mode replaces topk values at the end
@@ -360,6 +446,7 @@ def _try_run(args, initial_batch_size):
 def main():
     setup_default_logging()
     args = parser.parse_args()
+    print(args)
     model_cfgs = []
     model_names = []
     if os.path.isdir(args.checkpoint):
@@ -384,33 +471,62 @@ def main():
                 model_names = [line.rstrip() for line in f]
             model_cfgs = [(n, None) for n in model_names if n]
 
-    if len(model_cfgs):
-        results_file = args.results_file or './results-all.csv'
-        _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
-        results = []
-        try:
-            initial_batch_size = args.batch_size
-            for m, c in model_cfgs:
-                args.model = m
-                args.checkpoint = c
-                r = _try_run(args, initial_batch_size)
-                if 'error' in r:
-                    continue
-                if args.checkpoint:
-                    r['checkpoint'] = args.checkpoint
-                results.append(r)
-        except KeyboardInterrupt as e:
-            pass
-        results = sorted(results, key=lambda x: x['top1'], reverse=True)
-        if len(results):
-            write_results(results_file, results)
+    if args.precision == "bfloat16":
+        with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+            if len(model_cfgs):
+                results_file = args.results_file or './results-all.csv'
+                _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
+                results = []
+                try:
+                    initial_batch_size = args.batch_size
+                    for m, c in model_cfgs:
+                        args.model = m
+                        args.checkpoint = c
+                        r = _try_run(args, initial_batch_size)
+                        if 'error' in r:
+                            continue
+                        if args.checkpoint:
+                            r['checkpoint'] = args.checkpoint
+                        results.append(r)
+                except KeyboardInterrupt as e:
+                    pass
+                results = sorted(results, key=lambda x: x['top1'], reverse=True)
+                if len(results):
+                    write_results(results_file, results)
+            else:
+                if args.retry:
+                    results = _try_run(args, args.batch_size)
+                else:
+                    results = validate(args)
     else:
-        if args.retry:
-            results = _try_run(args, args.batch_size)
+        if len(model_cfgs):
+            results_file = args.results_file or './results-all.csv'
+            _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
+            results = []
+            try:
+                initial_batch_size = args.batch_size
+                for m, c in model_cfgs:
+                    args.model = m
+                    args.checkpoint = c
+                    r = _try_run(args, initial_batch_size)
+                    if 'error' in r:
+                        continue
+                    if args.checkpoint:
+                        r['checkpoint'] = args.checkpoint
+                    results.append(r)
+            except KeyboardInterrupt as e:
+                pass
+            results = sorted(results, key=lambda x: x['top1'], reverse=True)
+            if len(results):
+                write_results(results_file, results)
         else:
-            results = validate(args)
+            if args.retry:
+                results = _try_run(args, args.batch_size)
+            else:
+                results = validate(args)
+
     # output results in JSON to stdout w/ delimiter for runner script
-    print(f'--result\n{json.dumps(results, indent=4)}')
+    # print(f'--result\n{json.dumps(results, indent=4)}')
 
 
 def write_results(results_file, results):
