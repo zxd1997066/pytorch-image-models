@@ -38,11 +38,6 @@ function main {
             export ${addition_env}
         done
     fi
-    # dataset
-    if [ ! -e imagenet ];then
-        echo "[Error] Please set you dataset: ln -sf /patch/to/imagenet ."
-        exit 1
-    fi
 
     # set common info
     init_params $@
@@ -57,7 +52,7 @@ function main {
     for model_name in ${model_name_list[@]}
     do
         # cache
-        python validate.py ./imagenet/raw --model ${model_name} \
+        python validate.py --model ${model_name} \
             --pretrained --device cpu --batch-size 1 \
             --precision $precision --channels_last $channels_last \
             --num_iter 3 --num_warmup 1 \
@@ -87,7 +82,7 @@ function generate_core {
 
         printf " numactl -m $(echo ${cpu_array[i]} |awk -F ';' '{print $2}') \
                     -C $(echo ${cpu_array[i]} |awk -F ';' '{print $1}') \
-            python validate.py ./imagenet/raw --model ${model_name} \
+            python validate.py --model ${model_name} \
                 --pretrained --device cpu \
                 --batch-size $batch_size \
                 --num_iter $num_iter --num_warmup $num_warmup \
@@ -119,7 +114,7 @@ function generate_core_launcher {
                     --log_path ${log_dir} \
                     --ninstances ${#cpu_array[@]} \
                     --ncore_per_instance ${real_cores_per_instance} \
-            validate.py ./imagenet/raw --model ${model_name} \
+            validate.py --model ${model_name} \
                 --pretrained --device cpu \
                 --batch-size $batch_size \
                 --num_iter $num_iter --num_warmup $num_warmup \
