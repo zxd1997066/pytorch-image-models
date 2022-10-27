@@ -4,8 +4,6 @@ set -xe
 function set_environment {
     # requirements
     pip install -U numpy psutil
-    pip uninstall timm -y
-    python setup.py develop
     # unicode
     export LC_ALL=C.UTF-8
     export LANG=C.UTF-8
@@ -44,6 +42,17 @@ function main {
     fetch_cpu_info
     set_environment
 
+    # requirements
+    if [ "${DATASET_DIR}" == "" ];then
+        set +x
+        echo "[ERROR] Please set DATASET_DIR before launch"
+        echo "  export DATASET_DIR=/path/to/dataset/dir"
+        exit 1
+        set -x
+    fi
+    pip uninstall timm -y || true
+    python setup.py install
+
     # if multiple use 'xxx,xxx,xxx'
     model_name_list=($(echo "${model_name}" |sed 's/,/ /g'))
     batch_size_list=($(echo "${batch_size}" |sed 's/,/ /g'))
@@ -52,7 +61,7 @@ function main {
     for model_name in ${model_name_list[@]}
     do
         # cache
-        python validate.py --model ${model_name} \
+        python validate.py ${DATASET_DIR} --model ${model_name} \
             --pretrained --device cpu --batch-size 1 \
             --precision $precision --channels_last $channels_last \
             --num_iter 3 --num_warmup 1 \
@@ -82,7 +91,7 @@ function generate_core {
 
         printf " numactl -m $(echo ${cpu_array[i]} |awk -F ';' '{print $2}') \
                     -C $(echo ${cpu_array[i]} |awk -F ';' '{print $1}') \
-            python validate.py --model ${model_name} \
+            python validate.py ${DATASET_DIR} --model ${model_name} \
                 --pretrained --device cpu \
                 --batch-size $batch_size \
                 --num_iter $num_iter --num_warmup $num_warmup \
@@ -114,7 +123,7 @@ function generate_core_launcher {
                     --log_path ${log_dir} \
                     --ninstances ${#cpu_array[@]} \
                     --ncore_per_instance ${real_cores_per_instance} \
-            validate.py --model ${model_name} \
+            validate.py ${DATASET_DIR} --model ${model_name} \
                 --pretrained --device cpu \
                 --batch-size $batch_size \
                 --num_iter $num_iter --num_warmup $num_warmup \
@@ -250,7 +259,7 @@ function logs_path_clean {
 function init_params {
     device='cpu'
     framework='pytorch'
-    model_name='DCRNN'
+    model_name='xception'
     mode_name='realtime'
     precision='float32'
     batch_size=1
