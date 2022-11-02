@@ -472,7 +472,36 @@ def main():
             model_cfgs = [(n, None) for n in model_names if n]
 
     if args.precision == "bfloat16":
+        print("---- Use cpu AMP bfloat16")
         with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+            if len(model_cfgs):
+                results_file = args.results_file or './results-all.csv'
+                _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
+                results = []
+                try:
+                    initial_batch_size = args.batch_size
+                    for m, c in model_cfgs:
+                        args.model = m
+                        args.checkpoint = c
+                        r = _try_run(args, initial_batch_size)
+                        if 'error' in r:
+                            continue
+                        if args.checkpoint:
+                            r['checkpoint'] = args.checkpoint
+                        results.append(r)
+                except KeyboardInterrupt as e:
+                    pass
+                results = sorted(results, key=lambda x: x['top1'], reverse=True)
+                if len(results):
+                    write_results(results_file, results)
+            else:
+                if args.retry:
+                    results = _try_run(args, args.batch_size)
+                else:
+                    results = validate(args)
+    elif args.precision == "float16":
+        print("---- Use cuda AMP float16")
+        with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
             if len(model_cfgs):
                 results_file = args.results_file or './results-all.csv'
                 _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
