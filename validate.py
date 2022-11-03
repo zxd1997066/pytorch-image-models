@@ -288,6 +288,7 @@ def validate(args):
 
         end = time.time()
         if args.profile:
+            prof_act = [torch.profiler.ProfilerActivity.CUDA, torch.profiler.ProfilerActivity.CPU]
             profile_iter = args.num_iter/2 if args.num_iter > 0 else len(loader)/2
             def trace_handler(p):
                 output = p.key_averages().table(sort_by="self_cpu_time_total")
@@ -303,7 +304,7 @@ def validate(args):
                             args.model + '-' + str(p.step_num) + '-' + str(os.getpid()) + '.json'
                 p.export_chrome_trace(timeline_file)
             with torch.profiler.profile(
-                activities=[torch.profiler.ProfilerActivity.CPU],
+                activities=prof_act,
                 record_shapes=True,
                 schedule=torch.profiler.schedule(
                     wait=int(profile_iter),
