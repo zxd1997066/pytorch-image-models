@@ -330,6 +330,7 @@ def validate(args):
                     elapsed = time.time()
                     with amp_autocast():
                         output = model(input)
+                        if torch.cuda.is_available(): torch.cuda.synchronize()
                     elapsed = time.time() - elapsed
                     p.step()
                     print("Iteration: {}, inference time: {} sec.".format(batch_idx, elapsed), flush=True)
@@ -371,6 +372,7 @@ def validate(args):
                 elapsed = time.time()
                 with amp_autocast():
                     output = model(input)
+                    if torch.cuda.is_available(): torch.cuda.synchronize()
                 elapsed = time.time() - elapsed
                 print("Iteration: {}, inference time: {} sec.".format(batch_idx, elapsed), flush=True)
                 if batch_idx >= args.num_warmup:
