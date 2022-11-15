@@ -399,8 +399,8 @@ def validate(args):
     print("\n", "-"*20, "Summary", "-"*20)
     latency = total_time / total_sample * 1000
     throughput = total_sample / total_time
-    print("inference Latency:\t {:.3f} ms".format(latency))
-    print("inference Throughput:\t {:.2f} images/s".format(throughput))
+    print("inference Latency: {} ms".format(latency))
+    print("inference Throughput: {} images/s".format(throughput))
 
     if real_labels is not None:
         # real labels mode replaces topk values at the end
