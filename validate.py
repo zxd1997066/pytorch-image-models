@@ -272,6 +272,8 @@ def validate(args):
         import intel_extension_for_pytorch as ipex
         if args.precision == "bfloat16":
             model = ipex.optimize(model, dtype=torch.bfloat16, inplace=True)
+        elif args.precision == "float16":
+            model = ipex.optimize(model, dtype=torch.half, inplace=True)
         else:
             model = ipex.optimize(model, dtype=torch.float32, inplace=True)
         print("---- Use ipex model")
@@ -504,7 +506,7 @@ def main():
                     results = validate(args)
     elif args.precision == "float16":
         print("---- Use cuda AMP float16")
-        with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+        with torch.cpu.amp.autocast(enabled=True, dtype=torch.half):
             if len(model_cfgs):
                 results_file = args.results_file or './results-all.csv'
                 _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
