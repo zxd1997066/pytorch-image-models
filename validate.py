@@ -137,6 +137,10 @@ parser.add_argument('--jit', action='store_true', default=False, help='enable JI
 parser.add_argument('--profile', action='store_true', default=False, help='collect timeline')
 parser.add_argument('--num_iter', default=-1, type=int, help='test iterations')
 parser.add_argument('--num_warmup', default=-1, type=int, help='test warmup')
+parser.add_argument("--compile", action='store_true', default=False,
+                    help="enable torch.compile")
+parser.add_argument("--backend", type=str, default='inductor',
+                    help="enable torch.compile backend")
 
 
 def validate(args):
@@ -222,6 +226,8 @@ def validate(args):
 
     if args.num_gpu > 1:
         model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu)))
+    if args.compile:
+        model = torch.compile(model, backend=args.backend, options={"freezing": True})
 
     criterion = nn.CrossEntropyLoss().to(device)
 
