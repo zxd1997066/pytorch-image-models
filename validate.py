@@ -484,7 +484,7 @@ def main():
 
     if args.precision == "bfloat16":
         print("---- Use cpu AMP bfloat16")
-        with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True, dtype=torch.bfloat16):
             if len(model_cfgs):
                 results_file = args.results_file or './results-all.csv'
                 _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
@@ -512,7 +512,7 @@ def main():
                     results = validate(args)
     elif args.precision == "float16":
         print("---- Use cuda AMP float16")
-        with torch.cpu.amp.autocast(enabled=True, dtype=torch.half):
+        with torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True, dtype=torch.half):
             if len(model_cfgs):
                 results_file = args.results_file or './results-all.csv'
                 _logger.info('Running bulk validation on these pretrained models: {}'.format(', '.join(model_names)))
