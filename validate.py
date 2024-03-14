@@ -60,7 +60,7 @@ parser.add_argument('--dataset-download', action='store_true', default=False,
                     help='Allow download of dataset for torch/ and tfds/ datasets that support it.')
 parser.add_argument('--model', '-m', metavar='NAME', default='dpn92',
                     help='model architecture (default: dpn92)')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 2)')
 parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
@@ -261,7 +261,7 @@ def validate(args):
         interpolation=data_config['interpolation'],
         mean=data_config['mean'],
         std=data_config['std'],
-        num_workers=args.workers,
+        num_workers=0,
         crop_pct=crop_pct,
         pin_memory=args.pin_mem,
         device=device,
