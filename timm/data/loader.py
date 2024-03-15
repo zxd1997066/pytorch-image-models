@@ -218,7 +218,7 @@ def create_loader(
         device=torch.device('cuda'),
         tf_preprocessing=False,
         use_multi_epochs_loader=False,
-        persistent_workers=True,
+        persistent_workers=False,
         worker_seeding='all',
 ):
     re_num_splits = 0
