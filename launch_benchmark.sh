@@ -36,7 +36,11 @@ function main {
         for batch_size in ${batch_size_list[@]}
         do
             if [ $batch_size -le 0 ];then
-                batch_size=256
+                if [ "${model_name}" == "efficientnet_b8" ];then
+                    batch_size=128
+                else
+                    batch_size=256
+                fi
             fi
             # clean workspace
             logs_path_clean
