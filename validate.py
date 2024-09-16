@@ -145,6 +145,7 @@ parser.add_argument("--triton_cpu", action='store_true', default=False,
                     help="enable triton_cpu")
 
 def validate(args):
+    import torch
     # might as well try to validate something
     args.pretrained = args.pretrained or not args.checkpoint
     args.prefetcher = not args.no_prefetcher
