@@ -232,7 +232,12 @@ def validate(args):
     if args.num_gpu > 1:
         model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu)))
     if args.compile:
-        model = torch.compile(model, backend=args.backend, options={"freezing": True})
+        if args.backend == "zentorch":
+            import zentorch
+            import torch
+            model = torch.compile(model, backend=args.backend, dynamic=False)
+        else:
+            model = torch.compile(model, backend=args.backend, options={"freezing": True})
 
     criterion = nn.CrossEntropyLoss().to(device)
 
